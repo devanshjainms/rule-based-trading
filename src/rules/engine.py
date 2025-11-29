@@ -4,7 +4,7 @@ Trading Engine - Matches positions to rules, uses ticker for prices.
 This module provides the main trading engine that orchestrates:
 
 1. Monitoring positions from account (via PositionMonitor)
-2. Matching positions to exit rules
+2. Matching positions to exit rules from database
 3. Subscribing to ticker for real-time prices
 4. Evaluating TP/SL conditions
 5. Placing exit orders when triggered
@@ -15,14 +15,22 @@ This module provides the main trading engine that orchestrates:
 
 import asyncio
 import logging
-import threading
+import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Callable, Set
-from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Set
 
-from .schema import TradingConfig, ExitRule, TimeCondition
-from .parser import RulesParser
-from ..monitor import TrackedPosition, PositionMonitor
+from dataclasses import dataclass
+
+from .schema import (
+    ConditionType,
+    ExitRule,
+    StopLossCondition,
+    TakeProfitCondition,
+    TimeCondition,
+    TradingConfig,
+)
+from ..core.repositories import RulesRepository
+from ..monitor import PositionMonitor, TrackedPosition
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +99,10 @@ class TradingEngine:
 
     :param kite_client: Initialized KiteClient instance.
     :type kite_client: Any
-    :param rules_parser: RulesParser instance for loading rules.
-    :type rules_parser: RulesParser
+    :param rules_repository: RulesRepository instance for loading rules from database.
+    :type rules_repository: RulesRepository
+    :param user_id: User ID whose rules to load.
+    :type user_id: str
     :param ticker_client: Optional KiteTickerClient for real-time prices.
     :type ticker_client: Any
     :param on_trigger: Callback function when exit triggers.
@@ -112,7 +122,8 @@ class TradingEngine:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id="user-123",
             on_trigger=handle_exit,
         )
         await engine.start()
@@ -125,19 +136,23 @@ class TradingEngine:
     def __init__(
         self,
         kite_client: Any,
-        rules_parser: RulesParser,
+        rules_repository: RulesRepository,
+        user_id: str,
         ticker_client: Any = None,
         on_trigger: Optional[Callable] = None,
-        position_poll_interval: float = 2.0,
+        position_poll_interval: float = 1.0,
         price_poll_interval: float = 1.0,
+        rules_refresh_interval: float = 1.0,
     ) -> None:
         """
         Initialize the trading engine.
 
         :param kite_client: Initialized KiteClient instance.
         :type kite_client: Any
-        :param rules_parser: RulesParser instance for loading rules.
-        :type rules_parser: RulesParser
+        :param rules_repository: RulesRepository instance for loading rules.
+        :type rules_repository: RulesRepository
+        :param user_id: User ID whose rules to load.
+        :type user_id: str
         :param ticker_client: Optional KiteTickerClient for real-time prices.
         :type ticker_client: Any
         :param on_trigger: Callback function when exit triggers.
@@ -146,22 +161,113 @@ class TradingEngine:
         :type position_poll_interval: float
         :param price_poll_interval: Seconds between price polls (fallback mode).
         :type price_poll_interval: float
+        :param rules_refresh_interval: Seconds between rules refresh from database.
+        :type rules_refresh_interval: float
         """
         self.kite_client = kite_client
         self.ticker_client = ticker_client
-        self.parser = rules_parser
+        self.rules_repository = rules_repository
+        self.user_id = user_id
         self.on_trigger = on_trigger
         self.position_poll_interval = position_poll_interval
         self.price_poll_interval = price_poll_interval
+        self.rules_refresh_interval = rules_refresh_interval
 
         self.position_monitor: Optional[PositionMonitor] = None
         self._running = False
         self._price_task: Optional[asyncio.Task] = None
+        self._rules_task: Optional[asyncio.Task] = None
         self._ticker_connected = False
         self._active_trades: Dict[str, ActiveTrade] = {}
         self._triggered_symbols: Set[str] = set()
         self._prices: Dict[int, float] = {}
         self._config: Optional[TradingConfig] = None
+        self._rules: List[ExitRule] = []
+        self._rules_loaded = False
+
+    def _db_rule_to_exit_rule(self, db_rule: Dict[str, Any]) -> ExitRule:
+        """
+        Convert a database rule dict to an ExitRule schema object.
+
+        :param db_rule: Rule dictionary from database.
+        :type db_rule: Dict[str, Any]
+        :returns: ExitRule schema object.
+        :rtype: ExitRule
+        """
+        tp_data = db_rule.get("take_profit", {})
+        sl_data = db_rule.get("stop_loss", {})
+        tc_data = db_rule.get("time_conditions", {})
+
+        take_profit = None
+        if tp_data and tp_data.get("enabled", True):
+            take_profit = TakeProfitCondition(
+                enabled=tp_data.get("enabled", True),
+                condition_type=ConditionType(
+                    tp_data.get("condition_type", "relative")
+                ),
+                target=tp_data.get("target", 0),
+                trail=tp_data.get("trail", False),
+                trail_step=tp_data.get("trail_step"),
+            )
+
+        stop_loss = None
+        if sl_data and sl_data.get("enabled", True):
+            stop_loss = StopLossCondition(
+                enabled=sl_data.get("enabled", True),
+                condition_type=ConditionType(
+                    sl_data.get("condition_type", "relative")
+                ),
+                stop=sl_data.get("stop", 0),
+                trail=sl_data.get("trail", False),
+                trail_step=sl_data.get("trail_step"),
+            )
+
+        time_conditions = None
+        if tc_data:
+            time_conditions = TimeCondition(
+                start_time=tc_data.get("start_time"),
+                end_time=tc_data.get("end_time"),
+                square_off_time=tc_data.get("square_off_time"),
+                active_days=tc_data.get("active_days", [0, 1, 2, 3, 4]),
+            )
+
+        return ExitRule(
+            rule_id=db_rule.get("id", ""),
+            name=db_rule.get("name", ""),
+            symbol_pattern=db_rule.get("symbol_pattern") or "*",
+            exchange=db_rule.get("exchange"),
+            apply_to=db_rule.get("position_type") or "ALL",
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            time_conditions=time_conditions,
+        )
+
+    def _find_matching_rule(
+        self, symbol: str, exchange: str, position_type: str
+    ) -> Optional[ExitRule]:
+        """
+        Find a matching rule for a position.
+
+        :param symbol: Trading symbol.
+        :type symbol: str
+        :param exchange: Exchange.
+        :type exchange: str
+        :param position_type: Position type (LONG/SHORT).
+        :type position_type: str
+        :returns: Matching rule or None.
+        :rtype: Optional[ExitRule]
+        """
+        for rule in self._rules:
+            if rule.exchange and rule.exchange != exchange:
+                continue
+            if rule.apply_to != "ALL" and rule.apply_to != position_type:
+                continue
+            if rule.symbol_pattern:
+                pattern = rule.symbol_pattern.replace("*", ".*")
+                if not re.match(f"^{pattern}$", symbol, re.IGNORECASE):
+                    continue
+            return rule
+        return None
 
     def _on_new_position(self, position: TrackedPosition) -> None:
         """
@@ -175,25 +281,14 @@ class TradingEngine:
         if position.quantity == 0:
             return
 
-        self.parser.reload_if_changed()
-        self._config = self.parser.load()
-        rule = self._config.find_rule(
+        rule = self._find_matching_rule(
             position.trading_symbol, position.exchange, position.position_type
         )
 
         if rule is None:
-            if self._config.defaults and self._config.defaults.enabled:
-                logger.info(f"No rule for {position.trading_symbol}, using defaults")
-                rule = ExitRule(
-                    rule_id=f"default_{position.symbol_key}",
-                    name=f"Default for {position.trading_symbol}",
-                    symbol_pattern=position.trading_symbol,
-                    take_profit=self._config.defaults.take_profit,
-                    stop_loss=self._config.defaults.stop_loss,
-                )
-            else:
-                logger.info(f"No rule for {position.trading_symbol}, skipping")
-                return
+            logger.info(f"No rule for {position.trading_symbol}, skipping")
+            return
+
         tp_price = rule.calc_tp(position.entry_price, position.position_type)
         sl_price = rule.calc_sl(position.entry_price, position.position_type)
         trade = ActiveTrade(
@@ -415,6 +510,48 @@ class TradingEngine:
 
             await asyncio.sleep(self.price_poll_interval)
 
+    async def _load_rules(self) -> None:
+        """
+        Load rules from the database for the user.
+
+        Fetches rules from the rules repository and converts them to ExitRule objects.
+        """
+        rules_data = await self.rules_repository.get_rules(self.user_id)
+        self._rules = []
+
+        if rules_data:
+            for rule_dict in rules_data.get("rules", []):
+                if rule_dict.get("is_active", True):
+                    exit_rule = self._db_rule_to_exit_rule(rule_dict)
+                    self._rules.append(exit_rule)
+
+        self._rules_loaded = True
+        logger.info(f"Loaded {len(self._rules)} rules for user {self.user_id}")
+
+    async def reload_rules(self) -> None:
+        """
+        Reload rules from the database.
+
+        Can be called to refresh rules without restarting the engine.
+        """
+        await self._load_rules()
+
+    async def _rules_refresh_loop(self) -> None:
+        """
+        Background loop to periodically refresh rules from database.
+
+        Runs every rules_refresh_interval seconds to keep rules up-to-date.
+        """
+        while self._running:
+            try:
+                await asyncio.sleep(self.rules_refresh_interval)
+                if self._running:
+                    await self._load_rules()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Rules refresh error: {e}")
+
     async def start(self) -> None:
         """
         Start the trading engine.
@@ -430,7 +567,7 @@ class TradingEngine:
             return
 
         self._running = True
-        self._config = self.parser.load()
+        await self._load_rules()
         self.position_monitor = PositionMonitor(
             kite_client=self.kite_client,
             poll_interval=self.position_poll_interval,
@@ -451,7 +588,10 @@ class TradingEngine:
             logger.info("No ticker, using LTP polling")
             self._price_task = asyncio.create_task(self._price_loop())
 
-        logger.info("Trading engine started")
+        self._rules_task = asyncio.create_task(self._rules_refresh_loop())
+        logger.info(
+            f"Trading engine started (rules refresh every {self.rules_refresh_interval}s)"
+        )
 
     async def stop(self) -> None:
         """
@@ -467,6 +607,13 @@ class TradingEngine:
 
         if self.position_monitor:
             await self.position_monitor.stop()
+
+        if self._rules_task:
+            self._rules_task.cancel()
+            try:
+                await self._rules_task
+            except asyncio.CancelledError:
+                pass
 
         if self._price_task:
             self._price_task.cancel()
@@ -544,5 +691,5 @@ class TradingEngine:
                 if self.position_monitor
                 else 0
             ),
-            "rules_loaded": len(self._config.rules) if self._config else 0,
+            "rules_loaded": len(self._rules),
         }

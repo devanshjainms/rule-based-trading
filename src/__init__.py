@@ -10,8 +10,7 @@ A Python framework for trading using Zerodha Kite Connect API.
 __version__ = "1.0.0"
 __title__ = "KiteAPI"
 
-from .client import KiteClient
-from .ticker import KiteTickerClient
+from .brokers.kite import KiteClient, KiteTickerClient
 from .exceptions import (
     KiteException,
     TokenException,
@@ -40,11 +39,11 @@ __all__ = [
 def __getattr__(name: str):
     """Lazy import for module attributes."""
     if name == "KiteClient":
-        from .client import KiteClient
+        from .brokers.kite import KiteClient
 
         return KiteClient
     elif name == "KiteTickerClient":
-        from .ticker import KiteTickerClient
+        from .brokers.kite import KiteTickerClient
 
         return KiteTickerClient
     elif name in (

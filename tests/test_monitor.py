@@ -6,7 +6,6 @@ Tests position detection, callbacks, and polling behavior.
 
 import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock
 
 import sys
 

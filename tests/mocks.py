@@ -10,7 +10,6 @@ These mock the Kite Connect API without making real API calls.
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-import asyncio
 
 
 @dataclass
@@ -469,7 +468,6 @@ class MockTickerClient:
         :returns: None
         :rtype: None
         """
-        pass
 
     def simulate_tick(self, instrument_token: int, last_price: float, **extra) -> None:
         """
@@ -514,3 +512,84 @@ class MockTickerClient:
         :rtype: List[int]
         """
         return self._subscribed_tokens.copy()
+
+
+class MockRulesRepository:
+    """
+    Mock rules repository for testing.
+
+    Simulates database rules storage without a real database.
+
+    :ivar _rules: Dictionary mapping user_id to rules configuration.
+
+    Example::
+
+        repo = MockRulesRepository()
+        repo.set_rules("user-123", [
+            {
+                "id": "rule-1",
+                "name": "Test Rule",
+                "symbol_pattern": "SENSEX*",
+                "exchange": "BFO",
+                "take_profit": {"enabled": True, "condition_type": "relative", "target": 100},
+                "stop_loss": {"enabled": True, "condition_type": "relative", "stop": 40},
+            }
+        ])
+    """
+
+    def __init__(self) -> None:
+        """Initialize mock rules repository."""
+        self._rules: Dict[str, Dict[str, Any]] = {}
+
+    def set_rules(self, user_id: str, rules: List[Dict[str, Any]]) -> None:
+        """
+        Set rules for a user.
+
+        :param user_id: User ID.
+        :type user_id: str
+        :param rules: List of rule dictionaries.
+        :type rules: List[Dict[str, Any]]
+        """
+        self._rules[user_id] = {
+            "version": "2.0",
+            "rules": rules,
+        }
+
+    async def get_rules(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get rules for a user.
+
+        :param user_id: User ID.
+        :type user_id: str
+        :returns: Rules configuration or None.
+        :rtype: Optional[Dict[str, Any]]
+        """
+        return self._rules.get(user_id)
+
+    async def save_rules(self, user_id: str, rules: Dict[str, Any]) -> bool:
+        """
+        Save rules for a user.
+
+        :param user_id: User ID.
+        :type user_id: str
+        :param rules: Rules configuration.
+        :type rules: Dict[str, Any]
+        :returns: True if saved.
+        :rtype: bool
+        """
+        self._rules[user_id] = rules
+        return True
+
+    async def delete_rules(self, user_id: str) -> bool:
+        """
+        Delete rules for a user.
+
+        :param user_id: User ID.
+        :type user_id: str
+        :returns: True if deleted.
+        :rtype: bool
+        """
+        if user_id in self._rules:
+            del self._rules[user_id]
+            return True
+        return False

@@ -19,26 +19,16 @@ Test scenarios:
 4. SELL order is placed with correct quantity
 """
 
-import pytest
 import asyncio
-from datetime import datetime
+import sys
 from typing import List, Tuple
 
-import sys
+import pytest
 
 sys.path.insert(0, str(__file__).rsplit("/tests", 1)[0])
 
-from src.rules.schema import (
-    ExitRule,
-    TakeProfitCondition,
-    StopLossCondition,
-    ConditionType,
-    TradingConfig,
-)
-from src.rules.parser import RulesParser
-from src.rules.engine import TradingEngine, ActiveTrade
-from src.monitor import TrackedPosition
-from tests.mocks import MockKiteClient, MockTickerClient, MockPosition, MockOrder
+from src.rules.engine import ActiveTrade, TradingEngine
+from tests.mocks import MockKiteClient, MockPosition, MockRulesRepository
 
 
 class TestSensexScenario:
@@ -47,43 +37,42 @@ class TestSensexScenario:
     """
 
     @pytest.fixture
-    def setup(self, tmp_path):
+    def setup(self):
         """Set up the test environment."""
-        rules_content = """
-version: "2.0"
-
-defaults:
-  enabled: false
-
-rules:
-  - rule_id: "sensex-options"
-    name: "SENSEX Options"
-    symbol_pattern: "SENSEX*"
-    exchange: "BFO"
-    apply_to: "ALL"
-
-    take_profit:
-      enabled: true
-      condition_type: relative
-      target: 100
-      order_type: MARKET
-
-    stop_loss:
-      enabled: true
-      condition_type: relative
-      stop: 40
-      order_type: MARKET
-"""
-        rules_file = tmp_path / "rules.yaml"
-        rules_file.write_text(rules_content)
-
         client = MockKiteClient()
-        parser = RulesParser(str(rules_file))
+        rules_repo = MockRulesRepository()
+        user_id = "test-user-123"
+
+        rules_repo.set_rules(
+            user_id,
+            [
+                {
+                    "id": "sensex-options",
+                    "name": "SENSEX Options",
+                    "symbol_pattern": "SENSEX*",
+                    "exchange": "BFO",
+                    "position_type": None,
+                    "is_active": True,
+                    "take_profit": {
+                        "enabled": True,
+                        "condition_type": "relative",
+                        "target": 100,
+                    },
+                    "stop_loss": {
+                        "enabled": True,
+                        "condition_type": "relative",
+                        "stop": 40,
+                    },
+                    "time_conditions": {},
+                }
+            ],
+        )
 
         return {
             "client": client,
             "ticker": None,
-            "parser": parser,
+            "rules_repo": rules_repo,
+            "user_id": user_id,
         }
 
     def create_sensex_position(self, client: MockKiteClient) -> None:
@@ -130,33 +119,6 @@ rules:
         assert 366 <= pos["average_price"] <= 368
         assert pos["product"] == "NRML"
 
-    def test_rule_matching(self, setup):
-        """Test that SENSEX position matches sensex-options rule."""
-        parser = setup["parser"]
-        config = parser.load()
-
-        rule = config.find_rule("SENSEX25D0486000CE", "BFO", "LONG")
-
-        assert rule is not None
-        assert rule.rule_id == "sensex-options"
-        assert rule.take_profit is not None
-        assert rule.stop_loss is not None
-
-    def test_tp_sl_calculation(self, setup):
-        """Test TP/SL price calculation for the position."""
-        parser = setup["parser"]
-        config = parser.load()
-        rule = config.find_rule("SENSEX25D0486000CE", "BFO", "LONG")
-
-        entry_price = 366.89
-
-        tp_price = rule.calc_tp(entry_price, "LONG")
-        sl_price = rule.calc_sl(entry_price, "LONG")
-
-        assert tp_price == pytest.approx(466.89, rel=0.01)
-
-        assert sl_price == pytest.approx(326.89, rel=0.01)
-
     @pytest.mark.asyncio
     async def test_tp_trigger_scenario(self, setup):
         """
@@ -168,7 +130,8 @@ rules:
         3. SELL order for 1000 qty should be placed
         """
         client = setup["client"]
-        parser = setup["parser"]
+        rules_repo = setup["rules_repo"]
+        user_id = setup["user_id"]
 
         self.create_sensex_position(client)
 
@@ -180,7 +143,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,
@@ -224,7 +188,8 @@ rules:
         3. SELL order for 1000 qty should be placed
         """
         client = setup["client"]
-        parser = setup["parser"]
+        rules_repo = setup["rules_repo"]
+        user_id = setup["user_id"]
 
         self.create_sensex_position(client)
 
@@ -236,7 +201,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,
@@ -275,7 +241,8 @@ rules:
         3. No order should be placed
         """
         client = setup["client"]
-        parser = setup["parser"]
+        rules_repo = setup["rules_repo"]
+        user_id = setup["user_id"]
 
         self.create_sensex_position(client)
 
@@ -286,7 +253,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,
@@ -313,7 +281,8 @@ rules:
         This verifies the actual SELL order would be placed correctly.
         """
         client = setup["client"]
-        parser = setup["parser"]
+        rules_repo = setup["rules_repo"]
+        user_id = setup["user_id"]
 
         self.create_sensex_position(client)
 
@@ -334,7 +303,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,
@@ -376,51 +346,64 @@ class TestMultiplePositions:
     """Test handling multiple positions simultaneously."""
 
     @pytest.fixture
-    def setup_multi(self, tmp_path):
+    def setup_multi(self):
         """Set up with multiple rules."""
-        rules_content = """
-version: "2.0"
-
-rules:
-  - rule_id: "sensex-options"
-    name: "SENSEX Options"
-    symbol_pattern: "SENSEX*"
-    exchange: "BFO"
-    take_profit:
-      enabled: true
-      condition_type: relative
-      target: 100
-    stop_loss:
-      enabled: true
-      condition_type: relative
-      stop: 40
-
-  - rule_id: "nifty-options"
-    name: "NIFTY Options"
-    symbol_pattern: "NIFTY*"
-    exchange: "NFO"
-    take_profit:
-      enabled: true
-      condition_type: percentage
-      target: 30
-    stop_loss:
-      enabled: true
-      condition_type: percentage
-      stop: 20
-"""
-        rules_file = tmp_path / "rules.yaml"
-        rules_file.write_text(rules_content)
-
         client = MockKiteClient()
-        parser = RulesParser(str(rules_file))
+        rules_repo = MockRulesRepository()
+        user_id = "test-user-multi"
 
-        return {"client": client, "parser": parser}
+        rules_repo.set_rules(
+            user_id,
+            [
+                {
+                    "id": "sensex-options",
+                    "name": "SENSEX Options",
+                    "symbol_pattern": "SENSEX*",
+                    "exchange": "BFO",
+                    "position_type": None,
+                    "is_active": True,
+                    "take_profit": {
+                        "enabled": True,
+                        "condition_type": "relative",
+                        "target": 100,
+                    },
+                    "stop_loss": {
+                        "enabled": True,
+                        "condition_type": "relative",
+                        "stop": 40,
+                    },
+                    "time_conditions": {},
+                },
+                {
+                    "id": "nifty-options",
+                    "name": "NIFTY Options",
+                    "symbol_pattern": "NIFTY*",
+                    "exchange": "NFO",
+                    "position_type": None,
+                    "is_active": True,
+                    "take_profit": {
+                        "enabled": True,
+                        "condition_type": "percentage",
+                        "target": 30,
+                    },
+                    "stop_loss": {
+                        "enabled": True,
+                        "condition_type": "percentage",
+                        "stop": 20,
+                    },
+                    "time_conditions": {},
+                },
+            ],
+        )
+
+        return {"client": client, "rules_repo": rules_repo, "user_id": user_id}
 
     @pytest.mark.asyncio
     async def test_multiple_positions_tracked(self, setup_multi):
         """Test that multiple positions are tracked independently."""
         client = setup_multi["client"]
-        parser = setup_multi["parser"]
+        rules_repo = setup_multi["rules_repo"]
+        user_id = setup_multi["user_id"]
 
         client.add_position(
             MockPosition(
@@ -451,7 +434,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,

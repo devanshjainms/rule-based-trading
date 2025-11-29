@@ -6,11 +6,8 @@ Pytest fixtures for testing.
 """
 
 import pytest
-import tempfile
-import os
-from pathlib import Path
 
-from .mocks import MockKiteClient, MockTickerClient, MockPosition
+from .mocks import MockKiteClient, MockPosition, MockRulesRepository, MockTickerClient
 
 
 @pytest.fixture
@@ -36,6 +33,17 @@ def mock_ticker():
 
 
 @pytest.fixture
+def mock_rules_repo():
+    """
+    Create a mock rules repository.
+
+    :returns: Mock rules repository instance.
+    :rtype: MockRulesRepository
+    """
+    return MockRulesRepository()
+
+
+@pytest.fixture
 def sample_position():
     """
     Create a sample SENSEX position (like the screenshot).
@@ -57,73 +65,53 @@ def sample_position():
 
 
 @pytest.fixture
-def rules_yaml_content():
+def sample_rules():
     """
-    Sample rules YAML content.
+    Sample rules configuration for database.
 
-    :returns: YAML string with sample trading rules.
-    :rtype: str
+    :returns: List of rule dictionaries.
+    :rtype: list
     """
-    return """
-version: "2.0"
-
-defaults:
-  enabled: false
-
-rules:
-  - rule_id: "sensex-options"
-    name: "SENSEX Options"
-    symbol_pattern: "SENSEX*"
-    exchange: "BFO"
-    apply_to: "ALL"
-
-    take_profit:
-      enabled: true
-      condition_type: relative
-      target: 100
-      order_type: MARKET
-
-    stop_loss:
-      enabled: true
-      condition_type: relative
-      stop: 40
-      order_type: MARKET
-
-  - rule_id: "nifty-options"
-    name: "NIFTY Options"
-    symbol_pattern: "NIFTY*"
-    exchange: "NFO"
-    apply_to: "ALL"
-
-    take_profit:
-      enabled: true
-      condition_type: percentage
-      target: 30
-      order_type: MARKET
-
-    stop_loss:
-      enabled: true
-      condition_type: percentage
-      stop: 20
-      order_type: MARKET
-"""
-
-
-@pytest.fixture
-def rules_file(rules_yaml_content, tmp_path):
-    """
-    Create a temporary rules file.
-
-    :param rules_yaml_content: YAML content for rules file.
-    :type rules_yaml_content: str
-    :param tmp_path: Pytest temporary path fixture.
-    :type tmp_path: Path
-    :returns: Path to temporary rules file.
-    :rtype: str
-    """
-    rules_path = tmp_path / "rules.yaml"
-    rules_path.write_text(rules_yaml_content)
-    return str(rules_path)
+    return [
+        {
+            "id": "sensex-options",
+            "name": "SENSEX Options",
+            "symbol_pattern": "SENSEX*",
+            "exchange": "BFO",
+            "position_type": None,
+            "is_active": True,
+            "take_profit": {
+                "enabled": True,
+                "condition_type": "relative",
+                "target": 100,
+            },
+            "stop_loss": {
+                "enabled": True,
+                "condition_type": "relative",
+                "stop": 40,
+            },
+            "time_conditions": {},
+        },
+        {
+            "id": "nifty-options",
+            "name": "NIFTY Options",
+            "symbol_pattern": "NIFTY*",
+            "exchange": "NFO",
+            "position_type": None,
+            "is_active": True,
+            "take_profit": {
+                "enabled": True,
+                "condition_type": "percentage",
+                "target": 30,
+            },
+            "stop_loss": {
+                "enabled": True,
+                "condition_type": "percentage",
+                "stop": 20,
+            },
+            "time_conditions": {},
+        },
+    ]
 
 
 @pytest.fixture
@@ -139,5 +127,4 @@ def mock_client_with_position(mock_client, sample_position):
     :rtype: MockKiteClient
     """
     mock_client.add_position(sample_position)
-    return mock_client
     return mock_client

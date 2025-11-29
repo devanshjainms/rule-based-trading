@@ -17,8 +17,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import websocket
 
-from .config import Config, get_config
-from .constants import (
+from ...config import get_config
+from ...constants import (
     WEBSOCKET_ROOT_URI,
     WEBSOCKET_CONNECT_TIMEOUT,
     WEBSOCKET_RECONNECT_MAX_DELAY,
@@ -29,7 +29,7 @@ from .constants import (
     MODE_LTP,
     KITE_HEADER_VERSION,
 )
-from .exceptions import WebSocketException
+from ...exceptions import WebSocketException
 
 log = logging.getLogger(__name__)
 

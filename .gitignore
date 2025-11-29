@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Kite session files (contains access tokens)
+.kite_session.json
+login_error.png
+
 # C extensions
 *.so
 

@@ -319,3 +319,77 @@ def get_exception_class(error_type: str) -> type:
         raise exc_class("Token expired")
     """
     return EXCEPTION_MAP.get(error_type, GeneralException)
+
+
+class OAuthError(Exception):
+    """
+    OAuth authentication error.
+
+    Raised when OAuth flow fails due to invalid credentials,
+    expired tokens, or provider errors.
+
+    :param message: Error description.
+    :param provider: OAuth provider name (e.g., 'kite').
+    :param error_code: Provider-specific error code.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        provider: str = "unknown",
+        error_code: str = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.provider = provider
+        self.error_code = error_code
+
+    def __str__(self) -> str:
+        if self.error_code:
+            return f"[{self.provider}:{self.error_code}] {self.message}"
+        return f"[{self.provider}] {self.message}"
+
+
+class BrokerNotConnectedError(Exception):
+    """
+    Raised when user attempts trading without an active broker connection.
+
+    :param user_id: The user ID that lacks a broker connection.
+    :param broker: The broker type (e.g., 'kite').
+    """
+
+    def __init__(self, user_id: str, broker: str = None) -> None:
+        self.user_id = user_id
+        self.broker = broker
+        message = f"No active broker connection for user {user_id}"
+        if broker:
+            message += f" (broker: {broker})"
+        super().__init__(message)
+
+
+class RuleValidationError(Exception):
+    """
+    Raised when a trading rule fails validation.
+
+    :param rule_id: The rule ID that failed validation.
+    :param errors: List of validation error messages.
+    """
+
+    def __init__(self, rule_id: str, errors: list) -> None:
+        self.rule_id = rule_id
+        self.errors = errors
+        message = f"Rule '{rule_id}' validation failed: {', '.join(errors)}"
+        super().__init__(message)
+
+
+class EngineError(Exception):
+    """
+    Raised when the trading engine encounters an error.
+
+    :param message: Error description.
+    :param user_id: The user whose engine failed (if applicable).
+    """
+
+    def __init__(self, message: str, user_id: str = None) -> None:
+        self.user_id = user_id
+        super().__init__(message)

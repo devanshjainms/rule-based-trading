@@ -4,25 +4,23 @@ Tests for Trading Engine.
 Tests rule matching, TP/SL calculation, and trigger logic.
 """
 
-import pytest
 import asyncio
-from unittest.mock import MagicMock
-
 import sys
+
+import pytest
 
 sys.path.insert(0, str(__file__).rsplit("/tests", 1)[0])
 
 from src.rules.schema import (
-    ExitRule,
-    TakeProfitCondition,
-    StopLossCondition,
     ConditionType,
+    ExitRule,
+    StopLossCondition,
+    TakeProfitCondition,
     TradingConfig,
 )
-from src.rules.parser import RulesParser
-from src.rules.engine import TradingEngine, ActiveTrade
+from src.rules.engine import ActiveTrade, TradingEngine
 from src.monitor import TrackedPosition
-from tests.mocks import MockKiteClient, MockTickerClient, MockPosition
+from tests.mocks import MockKiteClient, MockPosition, MockRulesRepository
 
 
 class TestExitRule:
@@ -259,47 +257,49 @@ class TestTradingEngine:
     """Tests for TradingEngine."""
 
     @pytest.fixture
-    def engine_setup(self, tmp_path):
+    def engine_setup(self):
         """Set up engine with mocks."""
-        rules_content = """
-version: "2.0"
-
-rules:
-  - rule_id: "sensex-options"
-    name: "SENSEX Options"
-    symbol_pattern: "SENSEX*"
-    exchange: "BFO"
-    apply_to: "ALL"
-
-    take_profit:
-      enabled: true
-      condition_type: relative
-      target: 100
-      order_type: MARKET
-
-    stop_loss:
-      enabled: true
-      condition_type: relative
-      stop: 40
-      order_type: MARKET
-"""
-        rules_file = tmp_path / "rules.yaml"
-        rules_file.write_text(rules_content)
-
         client = MockKiteClient()
-        parser = RulesParser(str(rules_file))
+        rules_repo = MockRulesRepository()
+        user_id = "test-user-123"
+
+        rules_repo.set_rules(
+            user_id,
+            [
+                {
+                    "id": "sensex-options",
+                    "name": "SENSEX Options",
+                    "symbol_pattern": "SENSEX*",
+                    "exchange": "BFO",
+                    "position_type": None,
+                    "is_active": True,
+                    "take_profit": {
+                        "enabled": True,
+                        "condition_type": "relative",
+                        "target": 100,
+                    },
+                    "stop_loss": {
+                        "enabled": True,
+                        "condition_type": "relative",
+                        "stop": 40,
+                    },
+                    "time_conditions": {},
+                }
+            ],
+        )
 
         return {
             "client": client,
-            "parser": parser,
-            "rules_file": rules_file,
+            "rules_repo": rules_repo,
+            "user_id": user_id,
         }
 
     @pytest.mark.asyncio
     async def test_position_matched_to_rule(self, engine_setup):
         """Test that new position gets matched to correct rule."""
         client = engine_setup["client"]
-        parser = engine_setup["parser"]
+        rules_repo = engine_setup["rules_repo"]
+        user_id = engine_setup["user_id"]
 
         triggered_trades = []
 
@@ -308,7 +308,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,
@@ -342,7 +343,8 @@ rules:
     async def test_tp_trigger(self, engine_setup):
         """Test take-profit trigger."""
         client = engine_setup["client"]
-        parser = engine_setup["parser"]
+        rules_repo = engine_setup["rules_repo"]
+        user_id = engine_setup["user_id"]
 
         triggered_trades = []
 
@@ -351,7 +353,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,
@@ -385,7 +388,8 @@ rules:
     async def test_sl_trigger(self, engine_setup):
         """Test stop-loss trigger."""
         client = engine_setup["client"]
-        parser = engine_setup["parser"]
+        rules_repo = engine_setup["rules_repo"]
+        user_id = engine_setup["user_id"]
 
         triggered_trades = []
 
@@ -394,7 +398,8 @@ rules:
 
         engine = TradingEngine(
             kite_client=client,
-            rules_parser=parser,
+            rules_repository=rules_repo,
+            user_id=user_id,
             ticker_client=None,
             on_trigger=on_trigger,
             position_poll_interval=0.05,
